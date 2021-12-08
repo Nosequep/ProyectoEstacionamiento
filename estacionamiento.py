@@ -2,9 +2,19 @@
 #Librerias que se utilizan
 import tkinter
 import math
+from tkinter.constants import TRUE
+import serial
+from datetime import datetime
+
+
+
+import threading
+
 
 #Definición de las funciones-------------------------------------------------
 def generarEspaciosEstacionamiento(frameCont, et):
+    global listaEspaciosDisponibles
+    listaEspaciosDisponibles = []
     contador = 1
     for i in range(math.ceil(et/5)):
         for j in range(5):
@@ -14,12 +24,9 @@ def generarEspaciosEstacionamiento(frameCont, et):
             f.config(padx=5, pady=5)
             label = tkinter.Label(f, text = f"{contador}", bd=0)
             label.config(width=5, height=2)
-            if(contador < 4):
-                
-                label["bg"] = ROJO
-            else:
-                label["bg"] = VERDE
+            label["bg"] = VERDE
             label.pack(padx=2, pady=2)
+            listaEspaciosDisponibles.append(label)
             f.grid(row=i, column=j)
             contador +=1
 
@@ -29,10 +36,12 @@ def clearEspacios(frame):
         l.destroy()
 
 def editarEspaciosTotales():
+    global espacios_totales
     espacios_totales = int(textEspaciosTotales.get())
+    global espacios_disponibles
     espacios_disponibles = espacios_totales
     labelEspaciosTotales2.config(text=f"{espacios_totales}")
-    labelEspaciosDisponibles2.config(text=f"{espacios_disponibles-3}")
+    labelEspaciosDisponibles2.config(text=f"{espacios_disponibles}")
     clearEspacios(frameEspacios3)
     generarEspaciosEstacionamiento(frameEspacios3 , espacios_totales)
 
@@ -42,13 +51,21 @@ def eventoScrollListas(a, b):
     listaFecha.yview(a, b)
     listaHora.yview(a, b)
 
+def isEstacionamientoLleno():
+    global espacios_disponibles
+    return espacios_disponibles <= 0
+        
+
 #Variables generales----------------------------------------------------------
 espacios_totales = 23
 espacios_disponibles = espacios_totales
+
 #Colores
 ROJO = '#FF5773'
 VERDE = '#35DE55'
 
+listaEspaciosDisponibles = []
+listaEspaciosOcupados = []
 
 #Generación de la interfaz gráfica
 #Se crea la ventana
@@ -133,7 +150,7 @@ labelEspaciosDisponibles.config(font=("Arial", 12))
 labelEspaciosDisponibles.grid(row=1,column=0)
 
 labelEspaciosDisponibles2 = tkinter.Label(frameInformacion4)
-labelEspaciosDisponibles2.config(text=f"{espacios_disponibles-3}")
+labelEspaciosDisponibles2.config(text=f"{espacios_disponibles}")
 labelEspaciosTotales2.config(width=5)
 labelEspaciosDisponibles2.config(font=("Arial", 12))
 labelEspaciosDisponibles2.grid(row=1,column=1)
@@ -196,33 +213,96 @@ scrollbar.pack(side="right", fill="y")
 listaId = tkinter.Listbox(frameHistorial2, yscrollcommand = scrollbar.set)
 listaId.config(width=20)
 listaId.pack(side="left")
-for line in range(1, 4):
-    listaId.insert("end",str(line))
 
 listaEspacio = tkinter.Listbox(frameHistorial2, yscrollcommand = scrollbar.set)
 listaEspacio.config(width=20)
 listaEspacio.pack(side="left")
-for line in range(1, 4):
-    listaEspacio.insert("end",str(line))
+
 
 listaFecha = tkinter.Listbox(frameHistorial2, yscrollcommand = scrollbar.set)
 listaFecha.config(width=20)
 listaFecha.pack(side="left")
-for line in range(1, 4):
-    listaFecha.insert("end","07/12/2021")
+
 
 listaHora = tkinter.Listbox(frameHistorial2, yscrollcommand = scrollbar.set)
 listaHora.config(width=20)
 listaHora.pack(side="left")
-for line in range(1, 4):
-    listaHora.insert("end","3:00 pm")
+
+    
 
 
 scrollbar.config( command = eventoScrollListas)
 
 
 
+def recibirComandos():
+    #Hay que cambiar de COM4 a COM3
+    arduino = serial.Serial('COM4', 9600, timeout = 1)
+    while True:
+        
+        
+        print("Esperando por actualización de los sensores...")
+        print()
+      
+
+        #El ciclo continua hasta que se reciba un mensaje
+        while(True): 
+            
+            # Lee el puerto serie. Elimina los dos ultimos caracteres que
+            # son el salto de linea
+            data = arduino.readline()[:-2]
+            # Si se mando el comando 'Alarma-ON'
+            if data:
+                if(not isEstacionamientoLleno()):
+                    if(data == b'carro-estacionado'):
+                        ocuparEspacioEstacionamiento()
+                        print("se estaciona")
+                    elif(data == b'carro-salida'):
+                        desocuparEspacioEstacionamiento()
+                else: 
+
+                    arduino.write(b'lleno')
+                
+                    
+                print(data)
+                print()
+                #Sale del ciclo
+                break
+
+def ocuparEspacioEstacionamiento():
+    listaEspaciosDisponibles[0].config(bg=ROJO)
+    removed = listaEspaciosDisponibles.pop(0)
+    listaEspaciosOcupados.append(removed)
+    global espacios_disponibles
+    espacios_disponibles -= 1
+    labelEspaciosDisponibles2.config(text=f"{espacios_disponibles}")
+    registroEntrada(removed['text'])
+
+def desocuparEspacioEstacionamiento():
+    removed = listaEspaciosOcupados.pop()
+    removed.config(bg=VERDE)
+    listaEspaciosDisponibles.insert(0, removed)
+    global espacios_disponibles
+    espacios_disponibles += 1
+    labelEspaciosDisponibles2.config(text=f"{espacios_disponibles}")
+
+def registroEntrada(numEspacio):
+    global listaId
+    global listaEspacio
+    global listaFecha 
+    global listaHora
+    fecha = datetime.today().strftime('%Y-%m-%d')
+    hora = datetime.today().strftime('%H:%M')
+    listaId.insert("end", numEspacio)
+    listaEspacio.insert("end", numEspacio)
+    listaFecha.insert("end",fecha)
+    listaHora.insert("end",hora)
+x = threading.Thread(target=recibirComandos)
+x.start()
+
+
 #Se inicializa la ventana
 ventana.mainloop()
+
 
 
