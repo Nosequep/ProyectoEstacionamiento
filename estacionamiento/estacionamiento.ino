@@ -63,6 +63,7 @@ int estadoServo = ESTADO_CERRADO;
 
 //Lleva un conteo del tiempo estacionado en un espacio
 int tiempoEstacionado = 0;
+int tiempoInforme = 0;
 int isEstacionamientoLleno = false;
 
 void setup() {
@@ -107,6 +108,8 @@ void loop() {
     // Escribe el comando al puerto serie
     if (!strcmp(comando, "lleno")){
       isEstacionamientoLleno = true;   
+    }else if(!strcmp(comando, "disp")){
+      isEstacionamientoLleno = false;     
     }
   }
 
@@ -116,6 +119,7 @@ void loop() {
     if(pausa2.update()){
       //Se activa la alerta de proximidad
       alertaProximidad();  
+      
     }
   
     // Si ha transcurrido el tiempo de actualización del sensor pir
@@ -125,6 +129,7 @@ void loop() {
         estadoServo = ESTADO_CERRADO;
         //Se cierra ele servomotor
         servoMotor.write(estadoServo);
+        Serial.println("pluma-cerrada");
         //Se enciende el led
         digitalWrite(PIN_LED_PLUMA, LOW);
       }
@@ -140,6 +145,7 @@ void loop() {
         estadoServo = ESTADO_ABIERTO;
         //Se abre el servomotor
         servoMotor.write(estadoServo);
+        Serial.println("pluma-abierta");
         //Se enciende el led
         digitalWrite(PIN_LED_PLUMA, HIGH);
       }
@@ -168,7 +174,13 @@ void alertaProximidad() {
   int uS = sonar.ping_median();
   // Calcular la distancia a la que se encuentra el objeto
   int distancia = sonar.convert_cm(uS);
-  
+  tiempoInforme++;
+  if(tiempoInforme == 5){
+    Serial.print("distancia:");
+    Serial.println(distancia);  
+    tiempoInforme = 0;
+  }
+
   //Si la distancia es menor a DISTANCIA_ROJO, enciende el LED en rojo
   if (distancia <= DISTANCIA_ROJO){
     tiempoEstacionado++;

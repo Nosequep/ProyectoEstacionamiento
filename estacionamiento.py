@@ -5,6 +5,7 @@ import math
 from tkinter.constants import TRUE
 import serial
 from datetime import datetime
+import mysql.connector
 
 
 
@@ -13,6 +14,13 @@ import threading
 
 #Definición de las funciones-------------------------------------------------
 def generarEspaciosEstacionamiento(frameCont, et):
+    ''' Esta función genera todos los Label que representan visualmente los espacios
+        del estacionamiento
+    
+        @param frameCont el frame donde se generaran los espacios de estacionamiento
+        @param et indica los espacios totales que se van a generar
+
+    '''
     global listaEspaciosDisponibles
     listaEspaciosDisponibles = []
     contador = 1
@@ -31,11 +39,18 @@ def generarEspaciosEstacionamiento(frameCont, et):
             contador +=1
 
 def clearEspacios(frame):
+    ''' Esta función se encarga de borrar los widgets dentro de un frame
+    
+        @param frame es el contenedor al cual se le borraran los widgets
+    '''
     list = frame.grid_slaves()
     for l in list:
         l.destroy()
 
 def editarEspaciosTotales():
+    ''' Esta función se utiliza para actualizar los espacios totales cuando
+        se usa el boton de editar espacios totales.
+    '''
     global espacios_totales
     espacios_totales = int(textEspaciosTotales.get())
     global espacios_disponibles
@@ -46,36 +61,171 @@ def editarEspaciosTotales():
     generarEspaciosEstacionamiento(frameEspacios3 , espacios_totales)
 
 def eventoScrollListas(a, b):
+    ''' Esta función sirve para controlar sincronizar el scroll de todos los 
+        listbox widgets con el scroll general del frame
+    '''
     listaId.yview(a, b)
     listaEspacio.yview(a, b)
     listaFecha.yview(a, b)
     listaHora.yview(a, b)
 
 def isEstacionamientoLleno():
+    ''' Esta función indica si el estacionamiento esta completamente lleno,
+        osea que indica si ya no existen espacios disponibles
+
+        @return devulve true si el estacionamiento se encuentra lleno, false en caso contrario.
+    '''
     global espacios_disponibles
     return espacios_disponibles <= 0
-        
+
+def ocuparEspacioEstacionamiento(arduino):
+    ''' Esta función nos sirve para remover uno de los espacios disponibles y 
+        en el estacionamiento pasarlo a ocupado.
+
+        @param arduino el objeto para mandar mensajes al arduino
+    '''
+    listaEspaciosDisponibles[0].config(bg=ROJO)
+    removed = listaEspaciosDisponibles.pop(0)
+    listaEspaciosOcupados.append(removed)
+    global espacios_disponibles
+    espacios_disponibles -= 1
+    labelEspaciosDisponibles2.config(text=f"{espacios_disponibles}")
+    registroEntrada(removed['text'])
+    if(isEstacionamientoLleno()):
+        arduino.write(b'lleno')
+        print("esta lleno")
+
+def desocuparEspacioEstacionamiento():
+    ''' Esta función nos sirve para remover uno de los espacios ocupados y 
+        pasarlo a disponible.
+
+        @param arduino el objeto para mandar mensajes al arduino
+    '''
+    print("desocupando")
+    removed = listaEspaciosOcupados.pop()
+    removed.config(bg=VERDE)
+    listaEspaciosDisponibles.insert(0, removed)
+    global espacios_disponibles
+    espacios_disponibles += 1
+    labelEspaciosDisponibles2.config(text=f"{espacios_disponibles}")
+
+def registroEntrada(numEspacio):
+    ''' Esta función carga un registro de entrada en la tabla de
+        historial de entradas.
+
+        @param numEspacio es el número asignado que tine el espacio en el estacionamiento
+    '''
+    global contador
+    global listaId
+    global listaEspacio
+    global listaFecha 
+    global listaHora
+    contador += 1
+    fecha = datetime.today().strftime('%Y-%m-%d')
+    hora = datetime.today().strftime('%H:%M')
+    listaId.insert("end", contador)
+    listaEspacio.insert("end", numEspacio)
+    listaFecha.insert("end",fecha)
+    listaHora.insert("end",hora)
+    agregarRegistroDB(db, numEspacio, fecha, hora)
+
+def agregarRegistroDB(db, numEspacio, fecha, hora):
+    ''' Esta función registra los atributos de una entrada en la base de datos MySQL
+
+        @param db la conexión con la base de datos
+        @param numEspacio es el número asignado que tine el espacio en el estacionamiento
+        @param fecha la fecha en la que se registro la entrada
+        @param hora la hora en la que se registro la entrada
+    '''
+    query = f"INSERT INTO entrada(numEspacio, fecha, hora) VALUES ({numEspacio}, '{fecha}', '{hora}');"
+    #Objeto para ejectuar los queries
+    mycursor = db.cursor()
+    mycursor.execute(query)
+    db.commit()
+
+def recibirComandos():
+    ''' Esta función recibe todos los comandos que el arduino envia para 
+        realizar las diferetes acciones, como abrir la pluma barrera.
+    '''
+    while True:
+        print("Esperando por actualización de los sensores...")
+        print()
+      
+
+        #El ciclo continua hasta que se reciba un mensaje
+        while(True): 
+            
+            # Lee el puerto serie. Elimina los dos ultimos caracteres que
+            # son el salto de linea
+            data = arduino.readline()[:-2]
+            # Si se mando el comando 'Alarma-ON'
+            if data:
+                data = str(data).split("'")[1]
+                if(data == 'carro-estacionado'):
+                    if(not isEstacionamientoLleno()):
+                        ocuparEspacioEstacionamiento(arduino)
+                        print("se estaciona")   
+                      
+                elif(data == 'carro-salida'):
+                    if(espacios_disponibles != espacios_totales):
+                        desocuparEspacioEstacionamiento()
+                        arduino.write(b'disp')
+                elif(data == 'pluma-abierta'):
+                    labelPluma2.config(text="Abierto")
+                    labelPluma2.config(bg=VERDE)
+                elif(data == 'pluma-cerrada'):
+                    labelPluma2.config(text="Cerrado")
+                    labelPluma2.config(bg=ROJO)     
+                elif(data.split(":")[0] == 'distancia'):
+                    distancia = data.split(":")[1]
+                    labelSensor2.config(text=f"{distancia}"+ " cm")
+
+                    
+                print(data)
+                print()
+                #Sale del ciclo
+                break
 
 #Variables generales----------------------------------------------------------
+#Hay que cambiar de COM4 a COM3
+arduino = serial.Serial('COM4', 9600, timeout = 1)
+
+#Cantidad de espacios totales en el estacionamiento
 espacios_totales = 23
+#Cantidad de espacios disponibles en el estacionamiento
 espacios_disponibles = espacios_totales
 
 #Colores
 ROJO = '#FF5773'
 VERDE = '#35DE55'
 
+#Guarda los espacios que se encuentran disponibles
 listaEspaciosDisponibles = []
+#Guarda los espacios que se encuentran ocupados
 listaEspaciosOcupados = []
+
+#Lleva el conteo de los los registros de entrada
+contador = 0
+
+#Coneccion con base de datos mysql
+db = mysql.connector.connect(
+  host="localhost",
+  user="root",
+  passwd="1234",
+  database="estacionamiento"
+)
+
 
 #Generación de la interfaz gráfica
 #Se crea la ventana
 ventana = tkinter.Tk()
 ventana.title("Sistema de estacionamiento")
+
 ventana["bg"] = "grey" 
 #Dejar el tamaño de la ventana fijo
 ventana.resizable(False,True)
 #Redimencionar la ventana
-ventana.geometry("500x500")
+ventana.geometry("500x600")
 
 #Primer modulo de la interfaz------------------------------------------------
 frameEspacios1 = tkinter.Frame(ventana) 
@@ -154,6 +304,38 @@ labelEspaciosDisponibles2.config(text=f"{espacios_disponibles}")
 labelEspaciosTotales2.config(width=5)
 labelEspaciosDisponibles2.config(font=("Arial", 12))
 labelEspaciosDisponibles2.grid(row=1,column=1)
+
+frameInformacion5 = tkinter.Frame(frameInformacion1)
+frameInformacion5.pack(fill="x")
+
+labelPluma = tkinter.Label(frameInformacion5)
+labelPluma.config(text="Barrera pluma: ")
+labelPluma.config(font=("Arial", 12))
+labelPluma.grid(row=2,column=0)
+
+labelPluma2 = tkinter.Label(frameInformacion5)
+labelPluma2.config(padx=6)
+labelPluma2.config(text=f"Cerrada")
+labelPluma2.config(width=5)
+labelPluma2.config(bg=ROJO)
+labelPluma2.config(fg="white")
+labelPluma2.config(font=("Arial", 12))
+labelPluma2.grid(row=2,column=1)
+
+frameInformacion6 = tkinter.Frame(frameInformacion1)
+frameInformacion6.pack(fill="x")
+
+labelSensor = tkinter.Label(frameInformacion6)
+labelSensor.config(text="Sensor ultrasonico: ")
+labelSensor.config(font=("Arial", 12))
+labelSensor.grid(row=3,column=0)
+
+labelSensor2 = tkinter.Label(frameInformacion6)
+labelSensor2.config(padx=6)
+labelSensor2.config(text=f"0"+" cm")
+labelSensor2.config(width=5)
+labelSensor2.config(font=("Arial", 12))
+labelSensor2.grid(row=3,column=1)
 
 #Segundo modulo de la interfaz------------------------------------------------
 frameHistorial1 = tkinter.Frame(ventana)
@@ -234,69 +416,6 @@ listaHora.pack(side="left")
 scrollbar.config( command = eventoScrollListas)
 
 
-
-def recibirComandos():
-    #Hay que cambiar de COM4 a COM3
-    arduino = serial.Serial('COM4', 9600, timeout = 1)
-    while True:
-        
-        
-        print("Esperando por actualización de los sensores...")
-        print()
-      
-
-        #El ciclo continua hasta que se reciba un mensaje
-        while(True): 
-            
-            # Lee el puerto serie. Elimina los dos ultimos caracteres que
-            # son el salto de linea
-            data = arduino.readline()[:-2]
-            # Si se mando el comando 'Alarma-ON'
-            if data:
-                if(not isEstacionamientoLleno()):
-                    if(data == b'carro-estacionado'):
-                        ocuparEspacioEstacionamiento()
-                        print("se estaciona")
-                    elif(data == b'carro-salida'):
-                        desocuparEspacioEstacionamiento()
-                else: 
-
-                    arduino.write(b'lleno')
-                
-                    
-                print(data)
-                print()
-                #Sale del ciclo
-                break
-
-def ocuparEspacioEstacionamiento():
-    listaEspaciosDisponibles[0].config(bg=ROJO)
-    removed = listaEspaciosDisponibles.pop(0)
-    listaEspaciosOcupados.append(removed)
-    global espacios_disponibles
-    espacios_disponibles -= 1
-    labelEspaciosDisponibles2.config(text=f"{espacios_disponibles}")
-    registroEntrada(removed['text'])
-
-def desocuparEspacioEstacionamiento():
-    removed = listaEspaciosOcupados.pop()
-    removed.config(bg=VERDE)
-    listaEspaciosDisponibles.insert(0, removed)
-    global espacios_disponibles
-    espacios_disponibles += 1
-    labelEspaciosDisponibles2.config(text=f"{espacios_disponibles}")
-
-def registroEntrada(numEspacio):
-    global listaId
-    global listaEspacio
-    global listaFecha 
-    global listaHora
-    fecha = datetime.today().strftime('%Y-%m-%d')
-    hora = datetime.today().strftime('%H:%M')
-    listaId.insert("end", numEspacio)
-    listaEspacio.insert("end", numEspacio)
-    listaFecha.insert("end",fecha)
-    listaHora.insert("end",hora)
 x = threading.Thread(target=recibirComandos)
 x.start()
 
